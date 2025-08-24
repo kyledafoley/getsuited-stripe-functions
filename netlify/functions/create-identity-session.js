@@ -21,10 +21,15 @@ exports.handler = async (event) => {
     });
 
     return {
-      statusCode: 200,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: verificationSession.url, id: verificationSession.id }),
-    };
+  statusCode: 200,
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    url: verificationSession.url,
+    id: verificationSession.id,
+    status: verificationSession.status
+  }),
+};
+
   } catch (err) {
     console.error(err);
     return { statusCode: 500, body: JSON.stringify({ error: err.message }) };
