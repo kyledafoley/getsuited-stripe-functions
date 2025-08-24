@@ -17,6 +17,8 @@ exports.handler = async (event) => {
     const verificationSession = await stripe.identity.verificationSessions.create({
       type: 'document',
       options: { document: { allowed_types: ['driving_license', 'passport', 'id_card'] } },
+      require_matching_selfie: true,
+      require_live_capture: true,
       return_url: 'https://yourdomain.com/verified', // change this
     });
 
