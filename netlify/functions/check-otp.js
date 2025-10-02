@@ -6,27 +6,40 @@ exports.handler = async (event) => {
     }
 
     const { phone, to, code } = JSON.parse(event.body || '{}');
-    const dest = to || phone; // accept either
+    const dest = (to || phone || '').trim();
     if (!dest || !code) {
       return { statusCode: 400, body: JSON.stringify({ error: 'Missing phone or code' }) };
     }
 
     const accountSid = process.env.TWILIO_ACCOUNT_SID;
     const authToken = process.env.TWILIO_AUTH_TOKEN;
-    const verifyServiceSid = process.env.TWILIO_VERIFY_SERVICE_SID;
+    const serviceSid = process.env.TWILIO_VERIFY_SERVICE_SID;
 
-    // TEMP LOGS (remove later): confirm both functions see the same values
-    console.log('AC:', accountSid, 'VA:', verifyServiceSid);
+    const basicAuth = Buffer.from(`${accountSid}:${authToken}`).toString('base64');
+    const params = new URLSearchParams({ To: dest, Code: code });
 
-    const twilio = require('twilio')(accountSid, authToken);
+    const resp = await fetch(
+      `https://verify.twilio.com/v2/Services/${serviceSid}/VerificationCheck`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Basic ${basicAuth}`,
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: params,
+      }
+    );
 
-    const result = await twilio.verify.v2
-      .services(verifyServiceSid)
-      .verificationChecks.create({ to: dest, code });
+    const data = await resp.json();
 
-    return { statusCode: 200, body: JSON.stringify({ status: result.status }) };
-  } catch (err) {
-    console.error(err);
-    return { statusCode: 500, body: JSON.stringify({ error: err.message || 'Server error' }) };
+    if (!resp.ok) {
+      // surface Twilio's error as-is for easier debugging
+      return { statusCode: resp.status, body: JSON.stringify({ error: data }) };
+    }
+
+    // data.status is usually "approved" or "pending"
+    return { statusCode: 200, body: JSON.stringify({ status: data.status }) };
+  } catch (e) {
+    return { statusCode: 500, body: JSON.stringify({ error: e.message }) };
   }
 };
