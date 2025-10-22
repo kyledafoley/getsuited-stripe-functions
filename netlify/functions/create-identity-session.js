@@ -1,5 +1,10 @@
-// netlify/functions/create-identity-session.js
+// Serverless function: Create a Stripe Identity Verification Session
+// Path: netlify/functions/create-identity-session.js
+
+const Stripe = require("stripe");
+
 exports.handler = async (event) => {
+  // ---- CORS (required for Adalo custom actions) ----
   const cors = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
@@ -7,24 +12,49 @@ exports.handler = async (event) => {
     "Content-Type": "application/json",
   };
 
+  // Preflight
   if (event.httpMethod === "OPTIONS") {
     return { statusCode: 200, headers: cors, body: "" };
   }
+
+  // Only allow POST
   if (event.httpMethod !== "POST") {
-    return { statusCode: 405, headers: cors, body: JSON.stringify({ error: "Method Not Allowed" }) };
+    return {
+      statusCode: 405,
+      headers: cors,
+      body: JSON.stringify({ error: "Method Not Allowed" }),
+    };
   }
 
   try {
+    // ---- Config ----
     const stripeSecret = process.env.STRIPE_SECRET_KEY;
     if (!stripeSecret) {
-      return { statusCode: 500, headers: cors, body: JSON.stringify({ error: "Missing STRIPE_SECRET_KEY" }) };
+      return {
+        statusCode: 500,
+        headers: cors,
+        body: JSON.stringify({ error: "Missing STRIPE_SECRET_KEY env var" }),
+      };
     }
 
-    const Stripe = require("stripe");
+    // Optional: override return URL via env
+    const returnUrl =
+      process.env.IDENTITY_RETURN_URL ||
+      "https://gsidentityverification.netlify.app/verified";
+
     const stripe = new Stripe(stripeSecret, { apiVersion: "2024-06-20" });
 
-    const { userId, email } = JSON.parse(event.body || "{}");
+    // Parse optional inputs from Adalo
+    let payload = {};
+    try {
+      payload = JSON.parse(event.body || "{}");
+    } catch (_) {
+      // If body isn't valid JSON, continue with empty payload
+      payload = {};
+    }
+    const { userId = "", email = "" } = payload;
 
+    // ---- Create session ----
     const session = await stripe.identity.verificationSessions.create({
       type: "document",
       options: {
@@ -34,21 +64,25 @@ exports.handler = async (event) => {
           require_live_capture: true,
         },
       },
-      metadata: { userId: userId || "", email: email || "", app: "getsuited" },
-      return_url: "https://gsidentityverification.netlify.app/verified",
+      metadata: { userId, email, app: "getsuited" },
+      return_url: returnUrl,
     });
 
+    // ---- Response expected by Adalo ----
     return {
       statusCode: 200,
       headers: cors,
       body: JSON.stringify({
-        url: session.url,
         id: session.id,
-        status: session.status,
+        status: session.status, // typically 'requires_input'
+        url: session.url,       // use this in Adalo "Open External Website"
       }),
     };
   } catch (e) {
-    console.error(e);
-    return { statusCode: 500, headers: cors, body: JSON.stringify({ error: e.message }) };
+    return {
+      statusCode: 500,
+      headers: cors,
+      body: JSON.stringify({ error: e.message || "Unknown error" }),
+    };
   }
 };
