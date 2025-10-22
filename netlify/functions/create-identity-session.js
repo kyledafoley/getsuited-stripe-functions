@@ -47,3 +47,8 @@ exports.handler = async (event) => {
         status: session.status,
       }),
     };
+  } catch (e) {
+    console.error(e);
+    return { statusCode: 500, headers: cors, body: JSON.stringify({ error: e.message }) };
+  }
+};
