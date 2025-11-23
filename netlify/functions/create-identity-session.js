@@ -40,8 +40,8 @@ exports.handler = async (event) => {
     // Optional: override return URL via env
     const returnUrl =
       process.env.IDENTITY_RETURN_URL ||
-      "https://gsidentityverification.netlify.app/verified";
-
+      "https://getsuitednow.com/verification-complete";
+    
     const stripe = new Stripe(stripeSecret, { apiVersion: "2024-06-20" });
 
     // Parse optional inputs from Adalo
