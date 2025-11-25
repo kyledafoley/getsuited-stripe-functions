@@ -1,19 +1,22 @@
 const axios = require("axios");
+const twilioLib = require("twilio");
 
 // ------------------------------
-// CONFIG
+// ENV VARS
 // ------------------------------
 
-const ADALO_ORDERS_URL =
-  "https://api.adalo.com/v0/apps/898312b7-dedb-4c84-ab75-ae6c32c75e9f/collections/t_94atzmgrrmafbkgcqkpvhttn1";
+const {
+  ADALO_APP_ID,
+  ADALO_ORDERS_COLLECTION_ID,
+  ADALO_API_KEY,
+  TWILIO_ACCOUNT_SID,
+  TWILIO_AUTH_TOKEN,
+  TWILIO_MESSAGING_SERVICE_SID,
+} = process.env;
 
-const ADALO_AUTH = process.env.ADALO_API_KEY;
+const ADALO_ORDERS_URL = `https://api.adalo.com/v0/apps/${ADALO_APP_ID}/collections/${ADALO_ORDERS_COLLECTION_ID}`;
 
-const TWILIO_SID = process.env.TWILIO_ACCOUNT_SID;
-const TWILIO_AUTH = process.env.TWILIO_AUTH_TOKEN;
-const TWILIO_MESSAGING_SERVICE = process.env.TWILIO_MESSAGING_SERVICE_SID;
-
-const twilio = require("twilio")(TWILIO_SID, TWILIO_AUTH);
+const twilio = twilioLib(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
 
 // Helper: get today's date as "YYYY-MM-DD"
 function getTodayDate() {
@@ -30,11 +33,32 @@ function getTodayDate() {
 
 exports.handler = async (event) => {
   console.log("📨 send-sms-reminders INVOKED. Method:", event.httpMethod);
+  console.log("Using ADALO_ORDERS_URL:", ADALO_ORDERS_URL);
 
   try {
-    // We allow GET for easy testing in the browser
-    if (event.httpMethod === "GET") {
-      console.log("GET request — running full reminder logic for testing.");
+    // Allow GET for easy browser testing
+    if (event.httpMethod !== "GET" && event.httpMethod !== "POST") {
+      return {
+        statusCode: 405,
+        body: JSON.stringify({ error: "Method not allowed" }),
+      };
+    }
+
+    // Basic sanity check on env vars
+    if (!ADALO_APP_ID || !ADALO_ORDERS_COLLECTION_ID || !ADALO_API_KEY) {
+      console.error("Missing Adalo env vars");
+      return {
+        statusCode: 500,
+        body: JSON.stringify({ error: "Missing Adalo configuration" }),
+      };
+    }
+
+    if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN || !TWILIO_MESSAGING_SERVICE_SID) {
+      console.error("Missing Twilio env vars");
+      return {
+        statusCode: 500,
+        body: JSON.stringify({ error: "Missing Twilio configuration" }),
+      };
     }
 
     // 1) Fetch orders from Adalo
@@ -48,7 +72,8 @@ exports.handler = async (event) => {
     let returnCount = 0;
 
     for (const order of orders) {
-      const user = order.user || {};
+      // Adjust these to match your actual field names in Adalo:
+      const user = order.user || order.User || {}; // safety: check both user/User
       const phone = user.phone;
       const smsOptIn = user.sms_opt_in;
 
@@ -105,7 +130,7 @@ exports.handler = async (event) => {
       }),
     };
   } catch (err) {
-    console.error("❌ ERROR in handler:", err);
+    console.error("❌ ERROR in handler:", err.response?.data || err.message);
     return {
       statusCode: 500,
       body: JSON.stringify({ error: err.message }),
@@ -123,11 +148,13 @@ async function fetchOrders() {
 
     const response = await axios.get(ADALO_ORDERS_URL, {
       headers: {
-        Authorization: `Bearer ${ADALO_AUTH}`,
+        Authorization: `Bearer ${ADALO_API_KEY}`,
         "Content-Type": "application/json",
       },
+      // If you need nested user objects later, we can add query params here
     });
 
+    console.log("Raw Adalo response status:", response.status);
     return response.data.records || [];
   } catch (err) {
     console.error(
@@ -145,7 +172,7 @@ async function updateOrder(orderId, fields) {
 
     await axios.patch(url, fields, {
       headers: {
-        Authorization: `Bearer ${ADALO_AUTH}`,
+        Authorization: `Bearer ${ADALO_API_KEY}`,
         "Content-Type": "application/json",
       },
     });
@@ -159,7 +186,7 @@ async function updateOrder(orderId, fields) {
 async function sendSMS(to, body) {
   try {
     await twilio.messages.create({
-      messagingServiceSid: TWILIO_MESSAGING_SERVICE,
+      messagingServiceSid: TWILIO_MESSAGING_SERVICE_SID,
       to,
       body,
     });
@@ -170,3 +197,4 @@ async function sendSMS(to, body) {
     throw err;
   }
 }
+
