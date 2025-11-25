@@ -1,5 +1,4 @@
 const axios = require("axios");
-const dayjs = require("dayjs");
 
 // ------------------------------
 // CONFIG
@@ -16,6 +15,15 @@ const TWILIO_MESSAGING_SERVICE = process.env.TWILIO_MESSAGING_SERVICE_SID;
 
 const twilio = require("twilio")(TWILIO_SID, TWILIO_AUTH);
 
+// Helper: get today's date as "YYYY-MM-DD"
+function getTodayDate() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 // ------------------------------
 // MAIN HANDLER
 // ------------------------------
@@ -24,23 +32,23 @@ exports.handler = async (event) => {
   console.log("📨 send-sms-reminders INVOKED. Method:", event.httpMethod);
 
   try {
-    // Allow browser GET for testing
+    // We allow GET for easy testing in the browser
     if (event.httpMethod === "GET") {
-      console.log("GET request — running full logic for testing.");
+      console.log("GET request — running full reminder logic for testing.");
     }
 
-    // Fetch all orders from Adalo
+    // 1) Fetch orders from Adalo
     const orders = await fetchOrders();
     console.log(`Fetched ${orders.length} orders from Adalo.`);
 
-    const today = dayjs().format("YYYY-MM-DD");
+    const today = getTodayDate();
     console.log("Today is:", today);
 
     let pickupCount = 0;
     let returnCount = 0;
 
     for (const order of orders) {
-      const user = order.user || {}; // Ensure safety
+      const user = order.user || {};
       const phone = user.phone;
       const smsOptIn = user.sms_opt_in;
 
@@ -54,32 +62,36 @@ exports.handler = async (event) => {
       // ------------------------------
       // PICKUP REMINDER
       // ------------------------------
-
       if (pickupDate === today && !order.pickup_sms_sent_at) {
         console.log("Sending pickup reminder for order:", order.id);
 
         await sendSMS(
           phone,
-          `Reminder: Your suit pickup is scheduled for today!`
+          "Reminder: Your suit pickup is scheduled for today!"
         );
 
-        await updateOrder(order.id, { pickup_sms_sent_at: new Date().toISOString() });
+        await updateOrder(order.id, {
+          pickup_sms_sent_at: new Date().toISOString(),
+        });
+
         pickupCount++;
       }
 
       // ------------------------------
       // RETURN REMINDER
       // ------------------------------
-
       if (returnDate === today && !order.return_sms_sent_at) {
         console.log("Sending return reminder for order:", order.id);
 
         await sendSMS(
           phone,
-          `Reminder: Your suit return is due today. Thank you for using GetSuited!`
+          "Reminder: Your suit return is due today. Thank you for using GetSuited!"
         );
 
-        await updateOrder(order.id, { return_sms_sent_at: new Date().toISOString() });
+        await updateOrder(order.id, {
+          return_sms_sent_at: new Date().toISOString(),
+        });
+
         returnCount++;
       }
     }
@@ -93,7 +105,7 @@ exports.handler = async (event) => {
       }),
     };
   } catch (err) {
-    console.error("❌ ERROR:", err);
+    console.error("❌ ERROR in handler:", err);
     return {
       statusCode: 500,
       body: JSON.stringify({ error: err.message }),
@@ -118,7 +130,11 @@ async function fetchOrders() {
 
     return response.data.records || [];
   } catch (err) {
-    console.error("❌ Adalo Orders fetch failed:", err.response?.status, err.response?.data);
+    console.error(
+      "❌ Adalo Orders fetch failed:",
+      err.response?.status,
+      err.response?.data
+    );
     throw new Error(`Adalo Orders fetch failed: ${err.response?.status}`);
   }
 }
@@ -127,16 +143,12 @@ async function updateOrder(orderId, fields) {
   try {
     const url = `${ADALO_ORDERS_URL}/${orderId}`;
 
-    await axios.patch(
-      url,
-      fields,
-      {
-        headers: {
-          Authorization: `Bearer ${ADALO_AUTH}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
+    await axios.patch(url, fields, {
+      headers: {
+        Authorization: `Bearer ${ADALO_AUTH}`,
+        "Content-Type": "application/json",
+      },
+    });
 
     console.log("Updated order:", orderId, fields);
   } catch (err) {
