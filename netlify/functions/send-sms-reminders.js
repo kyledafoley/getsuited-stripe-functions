@@ -20,7 +20,11 @@ const ADALO_USERS_URL = `https://api.adalo.com/v0/apps/${ADALO_APP_ID}/collectio
 
 const twilio = twilioLib(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
 
-// Helper: get today's date as "YYYY-MM-DD"
+// ------------------------------
+// HELPERS
+// ------------------------------
+
+// Today as "YYYY-MM-DD"
 function getTodayDate() {
   const now = new Date();
   const year = now.getFullYear();
@@ -29,7 +33,7 @@ function getTodayDate() {
   return `${year}-${month}-${day}`;
 }
 
-// Helper: convert ISO datetime string to "YYYY-MM-DD"
+// Convert ISO datetime string → "YYYY-MM-DD"
 function toDateOnly(value) {
   if (!value) return null;
   if (typeof value === "string") return value.slice(0, 10);
@@ -40,14 +44,14 @@ function toDateOnly(value) {
   }
 }
 
-// Normalize phone to something Twilio can use
+// Normalize phone to something Twilio likes
 function normalizePhone(phone) {
   if (!phone) return null;
   const trimmed = String(phone).trim();
   if (trimmed.startsWith("+")) return trimmed;
-  // simple US assumption: 10 digits → +1
+
   const digits = trimmed.replace(/\D/g, "");
-  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 10) return `+1${digits}`; // assume US 10-digit
   return trimmed;
 }
 
@@ -68,8 +72,13 @@ exports.handler = async (event) => {
       };
     }
 
-    // Config checks
+    // Basic config checks
     if (!ADALO_APP_ID || !ADALO_ORDERS_COLLECTION_ID || !ADALO_API_KEY) {
+      console.error("Missing Adalo env vars", {
+        hasAppId: !!ADALO_APP_ID,
+        hasOrdersId: !!ADALO_ORDERS_COLLECTION_ID,
+        hasApiKey: !!ADALO_API_KEY,
+      });
       return {
         statusCode: 500,
         body: JSON.stringify({ error: "Missing Adalo configuration" }),
@@ -77,6 +86,7 @@ exports.handler = async (event) => {
     }
 
     if (!ADALO_USERS_COLLECTION_ID) {
+      console.error("Missing ADALO_USERS_COLLECTION_ID");
       return {
         statusCode: 500,
         body: JSON.stringify({ error: "Missing ADALO_USERS_COLLECTION_ID" }),
@@ -88,6 +98,11 @@ exports.handler = async (event) => {
       !TWILIO_AUTH_TOKEN ||
       !TWILIO_MESSAGING_SERVICE_SID
     ) {
+      console.error("Missing Twilio env vars", {
+        hasSid: !!TWILIO_ACCOUNT_SID,
+        hasToken: !!TWILIO_AUTH_TOKEN,
+        hasMsgSid: !!TWILIO_MESSAGING_SERVICE_SID,
+      });
       return {
         statusCode: 500,
         body: JSON.stringify({ error: "Missing Twilio configuration" }),
@@ -102,7 +117,7 @@ exports.handler = async (event) => {
 
     console.log(`Fetched ${orders.length} orders and ${users.length} users`);
 
-    // Build user map: id -> { phone, sms_opt_in }
+    // 2) Build user map: id -> { phone, smsOptIn }
     const userMap = {};
     for (const u of users) {
       userMap[u.id] = {
@@ -117,14 +132,12 @@ exports.handler = async (event) => {
     let pickupCount = 0;
     let returnCount = 0;
 
-    // 2) Iterate orders
+    // 3) Iterate orders
     for (const order of orders) {
       // Renter is an array of ids, e.g. "Renter":[274]
       const renterArr = order.Renter;
       const renterId =
-        Array.isArray(renterArr) && renterArr.length > 0
-          ? renterArr[0]
-          : null;
+        Array.isArray(renterArr) && renterArr.length > 0 ? renterArr[0] : null;
 
       const userInfo = renterId ? userMap[renterId] : null;
       const rawPhone = userInfo ? userInfo.phone : null;
@@ -139,12 +152,10 @@ exports.handler = async (event) => {
         smsOptIn,
       });
 
-      if (!phone || !smsOptIn) {
-        // skip if no phone or not opted in
-        continue;
-      }
+      // Skip if no phone or not opted in
+      if (!phone || !smsOptIn) continue;
 
-      // Use your real Adalo date fields
+      // Real Adalo date fields from your Orders data
       const pickupRaw =
         order["Item Pick Up Date"] ||
         order.pickup_date ||
@@ -165,7 +176,7 @@ exports.handler = async (event) => {
         returnDate,
       });
 
-      // PICKUP REMINDER: pickup today, not yet sent
+      // PICKUP reminder: pickup today + no previous pickup_sms_sent_at
       if (pickupDate === today && !order.pickup_sms_sent_at) {
         console.log("Sending PICKUP reminder for order:", order.id);
 
@@ -181,7 +192,7 @@ exports.handler = async (event) => {
         pickupCount++;
       }
 
-      // RETURN REMINDER: return today, not yet sent
+      // RETURN reminder: return today + no previous return_sms_sent_at
       if (returnDate === today && !order.return_sms_sent_at) {
         console.log("Sending RETURN reminder for order:", order.id);
 
@@ -207,7 +218,7 @@ exports.handler = async (event) => {
       }),
     };
   } catch (err) {
-    console.error("❌ Handler error:", err);
+    console.error("❌ Handler error:", err.response?.data || err.message || err);
     return {
       statusCode: 500,
       body: JSON.stringify({ error: err.message }),
@@ -216,11 +227,12 @@ exports.handler = async (event) => {
 };
 
 // ------------------------------
-// HELPERS
+// FETCH HELPERS
 // ------------------------------
 
 async function fetchOrders() {
   try {
+    console.log("Fetching Orders from:", ADALO_ORDERS_URL);
     const response = await axios.get(ADALO_ORDERS_URL, {
       headers: {
         Authorization: `Bearer ${ADALO_API_KEY}`,
@@ -228,6 +240,7 @@ async function fetchOrders() {
       },
     });
 
+    console.log("Orders status:", response.status);
     return response.data.records || [];
   } catch (err) {
     console.error("❌ Orders fetch error:", err.response?.data || err);
@@ -239,6 +252,7 @@ async function fetchOrders() {
 
 async function fetchUsers() {
   try {
+    console.log("Fetching Users from:", ADALO_USERS_URL);
     const response = await axios.get(ADALO_USERS_URL, {
       headers: {
         Authorization: `Bearer ${ADALO_API_KEY}`,
@@ -246,6 +260,7 @@ async function fetchUsers() {
       },
     });
 
+    console.log("Users status:", response.status);
     return response.data.records || [];
   } catch (err) {
     console.error("❌ Users fetch error:", err.response?.data || err);
@@ -254,6 +269,10 @@ async function fetchUsers() {
     );
   }
 }
+
+// ------------------------------
+// UPDATE + SMS HELPERS
+// ------------------------------
 
 async function updateOrder(orderId, fields) {
   try {
@@ -264,6 +283,7 @@ async function updateOrder(orderId, fields) {
         "Content-Type": "application/json",
       },
     });
+    console.log("Updated order", orderId, fields);
   } catch (err) {
     console.error("❌ Update error:", err.response?.data || err);
   }
