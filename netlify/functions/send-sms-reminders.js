@@ -33,10 +33,10 @@ function getTodayDate() {
 
 exports.handler = async (event) => {
   console.log("📨 send-sms-reminders INVOKED. Method:", event.httpMethod);
-  console.log("Using ADALO_ORDERS_URL:", ADALO_ORDERS_URL);
+  console.log("ADALO_ORDERS_URL:", ADALO_ORDERS_URL);
 
   try {
-    // Allow GET for easy browser testing
+    // Allow GET (browser test) and POST (cron)
     if (event.httpMethod !== "GET" && event.httpMethod !== "POST") {
       return {
         statusCode: 405,
@@ -44,17 +44,30 @@ exports.handler = async (event) => {
       };
     }
 
-    // Basic sanity check on env vars
+    // Adalo config sanity check
     if (!ADALO_APP_ID || !ADALO_ORDERS_COLLECTION_ID || !ADALO_API_KEY) {
-      console.error("Missing Adalo env vars");
+      console.error("Missing Adalo env vars", {
+        hasAppId: !!ADALO_APP_ID,
+        hasOrdersId: !!ADALO_ORDERS_COLLECTION_ID,
+        hasApiKey: !!ADALO_API_KEY,
+      });
       return {
         statusCode: 500,
         body: JSON.stringify({ error: "Missing Adalo configuration" }),
       };
     }
 
-    if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN || !TWILIO_MESSAGING_SERVICE_SID) {
-      console.error("Missing Twilio env vars");
+    // Twilio config sanity check
+    if (
+      !TWILIO_ACCOUNT_SID ||
+      !TWILIO_AUTH_TOKEN ||
+      !TWILIO_MESSAGING_SERVICE_SID
+    ) {
+      console.error("Missing Twilio env vars", {
+        hasSid: !!TWILIO_ACCOUNT_SID,
+        hasToken: !!TWILIO_AUTH_TOKEN,
+        hasMsgSid: !!TWILIO_MESSAGING_SERVICE_SID,
+      });
       return {
         statusCode: 500,
         body: JSON.stringify({ error: "Missing Twilio configuration" }),
@@ -72,8 +85,8 @@ exports.handler = async (event) => {
     let returnCount = 0;
 
     for (const order of orders) {
-      // Adjust these to match your actual field names in Adalo:
-      const user = order.user || order.User || {}; // safety: check both user/User
+      // Adjust these field names if needed to match your Adalo schema
+      const user = order.user || order.User || {};
       const phone = user.phone;
       const smsOptIn = user.sms_opt_in;
 
@@ -130,7 +143,10 @@ exports.handler = async (event) => {
       }),
     };
   } catch (err) {
-    console.error("❌ ERROR in handler:", err.response?.data || err.message);
+    console.error(
+      "❌ ERROR in handler:",
+      err.response?.data || err.message || err
+    );
     return {
       statusCode: 500,
       body: JSON.stringify({ error: err.message }),
@@ -145,16 +161,18 @@ exports.handler = async (event) => {
 async function fetchOrders() {
   try {
     console.log("Fetching orders from:", ADALO_ORDERS_URL);
+    console.log("ADALO_APP_ID:", ADALO_APP_ID);
+    console.log("ADALO_ORDERS_COLLECTION_ID:", ADALO_ORDERS_COLLECTION_ID);
+    console.log("ADALO_API_KEY present:", !!ADALO_API_KEY);
 
     const response = await axios.get(ADALO_ORDERS_URL, {
       headers: {
         Authorization: `Bearer ${ADALO_API_KEY}`,
         "Content-Type": "application/json",
       },
-      // If you need nested user objects later, we can add query params here
     });
 
-    console.log("Raw Adalo response status:", response.status);
+    console.log("Adalo response status:", response.status);
     return response.data.records || [];
   } catch (err) {
     console.error(
@@ -162,7 +180,12 @@ async function fetchOrders() {
       err.response?.status,
       err.response?.data
     );
-    throw new Error(`Adalo Orders fetch failed: ${err.response?.status}`);
+
+    throw new Error(
+      `Adalo Orders fetch failed: ${
+        err.response?.status
+      } - ${JSON.stringify(err.response?.data)}`
+    );
   }
 }
 
@@ -197,4 +220,3 @@ async function sendSMS(to, body) {
     throw err;
   }
 }
-
