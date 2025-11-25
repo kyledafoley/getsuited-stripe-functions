@@ -1,301 +1,206 @@
 const axios = require("axios");
-const twilioLib = require("twilio");
+const twilio = require("twilio");
 
 // ------------------------------
-// ENV VARS
+// ENVIRONMENT VARIABLES
 // ------------------------------
-
 const {
-  ADALO_APP_ID,
-  ADALO_ORDERS_COLLECTION_ID,
-  ADALO_API_KEY,
   TWILIO_ACCOUNT_SID,
   TWILIO_AUTH_TOKEN,
   TWILIO_MESSAGING_SERVICE_SID,
+  ADALO_API_KEY,
+  ADALO_APP_ID,
+  ADALO_ORDERS_COLLECTION_ID,
 } = process.env;
 
-// Orders still use env IDs
+// ------------------------------
+// ADALO COLLECTION ENDPOINTS
+// ------------------------------
+
+// ✅ Correct Users collection URL (yours)
+const ADALO_USERS_URL =
+  "https://api.adalo.com/v0/apps/898312b7-dedb-4c84-ab75-ae6c32c75e9f/collections/t_461e515419f448d18b49ff1958235f04";
+
+// ✅ Orders collection URL (based on your variables)
 const ADALO_ORDERS_URL = `https://api.adalo.com/v0/apps/${ADALO_APP_ID}/collections/${ADALO_ORDERS_COLLECTION_ID}`;
 
-// Users: use the known-good collection URL you just used with curl
-const ADALO_USERS_URL =
-  "https://api.adalo.com/v0/apps/898312b7-dedb-4c84-ab75-ae6c32c75e9f/collections/t_461e515419f448d1b849ff19582355f04";
-
-const twilio = twilioLib(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
-
 // ------------------------------
-// HELPERS
+// TWILIO
 // ------------------------------
+let twilioClient = null;
 
-// Today as "YYYY-MM-DD"
-function getTodayDate() {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const day = String(now.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+if (TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN) {
+  twilioClient = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
 }
 
-// Convert ISO datetime string → "YYYY-MM-DD"
-function toDateOnly(value) {
-  if (!value) return null;
-  if (typeof value === "string") return value.slice(0, 10);
-  try {
-    return new Date(value).toISOString().slice(0, 10);
-  } catch {
-    return null;
-  }
+// ------------------------------
+// DATE HELPERS
+// ------------------------------
+function startOfDay(date = new Date()) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 }
 
-// Normalize phone to something Twilio likes
-function normalizePhone(phone) {
-  if (!phone) return null;
-  const trimmed = String(phone).trim();
-  if (trimmed.startsWith("+")) return trimmed;
-
-  const digits = trimmed.replace(/\D/g, "");
-  if (digits.length === 10) return `+1${digits}`; // assume US 10-digit
-  return trimmed;
+function isToday(dateString) {
+  if (!dateString) return false;
+  return startOfDay(new Date(dateString)).getTime() === startOfDay().getTime();
 }
 
 // ------------------------------
 // MAIN HANDLER
 // ------------------------------
-
-exports.handler = async (event) => {
-  console.log("📨 send-sms-reminders INVOKED");
-  console.log("ADALO_ORDERS_URL:", ADALO_ORDERS_URL);
-  console.log("ADALO_USERS_URL:", ADALO_USERS_URL);
-
+exports.handler = async () => {
   try {
-    if (event.httpMethod !== "GET" && event.httpMethod !== "POST") {
-      return {
-        statusCode: 405,
-        body: JSON.stringify({ error: "Method not allowed" }),
-      };
-    }
-
-    // Basic config checks
-    if (!ADALO_APP_ID || !ADALO_ORDERS_COLLECTION_ID || !ADALO_API_KEY) {
-      console.error("Missing Adalo env vars", {
-        hasAppId: !!ADALO_APP_ID,
-        hasOrdersId: !!ADALO_ORDERS_COLLECTION_ID,
-        hasApiKey: !!ADALO_API_KEY,
+    // ------------------------------
+    // 1. FETCH USERS
+    // ------------------------------
+    let usersResponse;
+    try {
+      usersResponse = await axios.get(ADALO_USERS_URL, {
+        headers: {
+          Authorization: `Bearer ${ADALO_API_KEY}`,
+          "Content-Type": "application/json",
+        },
       });
+    } catch (err) {
       return {
         statusCode: 500,
-        body: JSON.stringify({ error: "Missing Adalo configuration" }),
+        body: JSON.stringify({
+          error: `Adalo Users fetch failed: ${err.response?.status || ""} - ${
+            err.response?.statusText || ""
+          }`,
+        }),
       };
     }
 
-    if (
-      !TWILIO_ACCOUNT_SID ||
-      !TWILIO_AUTH_TOKEN ||
-      !TWILIO_MESSAGING_SERVICE_SID
-    ) {
-      console.error("Missing Twilio env vars", {
-        hasSid: !!TWILIO_ACCOUNT_SID,
-        hasToken: !!TWILIO_AUTH_TOKEN,
-        hasMsgSid: !!TWILIO_MESSAGING_SERVICE_SID,
+    const users = usersResponse.data.records || [];
+
+    // ------------------------------
+    // 2. FETCH ORDERS
+    // ------------------------------
+    let ordersResponse;
+    try {
+      ordersResponse = await axios.get(ADALO_ORDERS_URL, {
+        headers: {
+          Authorization: `Bearer ${ADALO_API_KEY}`,
+          "Content-Type": "application/json",
+        },
       });
+    } catch (err) {
       return {
         statusCode: 500,
-        body: JSON.stringify({ error: "Missing Twilio configuration" }),
+        body: JSON.stringify({
+          error: `Adalo Orders fetch failed: ${err.response?.status || ""} - ${
+            err.response?.statusText || ""
+          }`,
+        }),
       };
     }
 
-    // 1) Fetch orders + users in parallel
-    const [orders, users] = await Promise.all([fetchOrders(), fetchUsers()]);
+    const orders = ordersResponse.data.records || [];
 
-    console.log(`Fetched ${orders.length} orders and ${users.length} users`);
+    // ------------------------------
+    // 3. SETUP COUNTS
+    // ------------------------------
+    let pickupRemindersSent = 0;
+    let returnRemindersSent = 0;
 
-    // 2) Build user map: id -> { phone, smsOptIn }
-    const userMap = {};
-    for (const u of users) {
-      userMap[u.id] = {
-        phone: u["Mobile Number"] || u.phone,
-        smsOptIn: u.sms_opt_in === true || u.sms_opt_in === "true",
-      };
-    }
-
-    const today = getTodayDate();
-    console.log("Today is:", today);
-
-    let pickupCount = 0;
-    let returnCount = 0;
-
-    // 3) Iterate orders
+    // ------------------------------
+    // 4. LOOP THROUGH ORDERS
+    // ------------------------------
     for (const order of orders) {
-      // Renter is an array of ids, e.g. "Renter":[274]
-      const renterArr = order.Renter;
-      const renterId =
-        Array.isArray(renterArr) && renterArr.length > 0 ? renterArr[0] : null;
+      const renterID = Array.isArray(order.Renter) ? order.Renter[0] : null;
+      const renter = users.find((u) => u.id === renterID);
 
-      const userInfo = renterId ? userMap[renterId] : null;
-      const rawPhone = userInfo ? userInfo.phone : null;
-      const smsOptIn = userInfo ? userInfo.smsOptIn : false;
+      if (!renter) continue;
+      if (!renter["sms_opt_in"]) continue;
+      if (!renter["Mobile Number"]) continue;
 
-      const phone = normalizePhone(rawPhone);
+      const pickupDate = order["Item Pick Up Date"];
+      const returnDate = order["Return Due Date"];
 
-      console.log("Order", order.id, {
-        renterId,
-        rawPhone,
-        normalizedPhone: phone,
-        smsOptIn,
-      });
+      const pickupAlreadySent = order["pickup_sms_sent_at"];
+      const returnAlreadySent = order["return_sms_sent_at"];
 
-      // Skip if no phone or not opted in
-      if (!phone || !smsOptIn) continue;
+      const renterPhone = "+1" + renter["Mobile Number"];
 
-      // Real Adalo date fields from your Orders data
-      const pickupRaw =
-        order["Item Pick Up Date"] ||
-        order.pickup_date ||
-        order.pickupDate;
+      // ------------------------------
+      // PICKUP REMINDER
+      // ------------------------------
+      if (pickupDate && isToday(pickupDate) && !pickupAlreadySent) {
+        if (twilioClient && TWILIO_MESSAGING_SERVICE_SID) {
+          try {
+            await twilioClient.messages.create({
+              messagingServiceSid: TWILIO_MESSAGING_SERVICE_SID,
+              to: renterPhone,
+              body: `Reminder: Your GetSuited pickup is today!`,
+            });
 
-      const returnRaw =
-        order["Return Due Date"] ||
-        order.return_date ||
-        order.returnDate;
+            pickupRemindersSent++;
 
-      const pickupDate = toDateOnly(pickupRaw);
-      const returnDate = toDateOnly(returnRaw);
-
-      console.log("Dates for order", order.id, {
-        pickupRaw,
-        pickupDate,
-        returnRaw,
-        returnDate,
-      });
-
-      // PICKUP reminder: pickup today + no previous pickup_sms_sent_at
-      if (pickupDate === today && !order.pickup_sms_sent_at) {
-        console.log("Sending PICKUP reminder for order:", order.id);
-
-        await sendSMS(
-          phone,
-          "Reminder: Your suit pickup is scheduled for today!"
-        );
-
-        await updateOrder(order.id, {
-          pickup_sms_sent_at: new Date().toISOString(),
-        });
-
-        pickupCount++;
+            // Update Adalo to mark pickup reminder sent
+            await axios.patch(
+              `${ADALO_ORDERS_URL}/${order.id}`,
+              { pickup_sms_sent_at: new Date().toISOString() },
+              {
+                headers: {
+                  Authorization: `Bearer ${ADALO_API_KEY}`,
+                  "Content-Type": "application/json",
+                },
+              }
+            );
+          } catch (err) {
+            console.log("Pickup SMS failed:", err.message);
+          }
+        }
       }
 
-      // RETURN reminder: return today + no previous return_sms_sent_at
-      if (returnDate === today && !order.return_sms_sent_at) {
-        console.log("Sending RETURN reminder for order:", order.id);
+      // ------------------------------
+      // RETURN REMINDER
+      // ------------------------------
+      if (returnDate && isToday(returnDate) && !returnAlreadySent) {
+        if (twilioClient && TWILIO_MESSAGING_SERVICE_SID) {
+          try {
+            await twilioClient.messages.create({
+              messagingServiceSid: TWILIO_MESSAGING_SERVICE_SID,
+              to: renterPhone,
+              body: `Reminder: Your GetSuited return is due today.`,
+            });
 
-        await sendSMS(
-          phone,
-          "Reminder: Your suit return is due today. Thank you for using GetSuited!"
-        );
+            returnRemindersSent++;
 
-        await updateOrder(order.id, {
-          return_sms_sent_at: new Date().toISOString(),
-        });
-
-        returnCount++;
+            // Update return sent
+            await axios.patch(
+              `${ADALO_ORDERS_URL}/${order.id}`,
+              { return_sms_sent_at: new Date().toISOString() },
+              {
+                headers: {
+                  Authorization: `Bearer ${ADALO_API_KEY}`,
+                  "Content-Type": "application/json",
+                },
+              }
+            );
+          } catch (err) {
+            console.log("Return SMS failed:", err.message);
+          }
+        }
       }
     }
 
+    // ------------------------------
+    // END SUCCESS RESPONSE
+    // ------------------------------
     return {
       statusCode: 200,
       body: JSON.stringify({
         message: "SMS reminders processed",
-        pickupRemindersSent: pickupCount,
-        returnRemindersSent: returnCount,
+        pickupRemindersSent,
+        returnRemindersSent,
       }),
     };
-  } catch (err) {
-    console.error("❌ Handler error:", err.response?.data || err.message || err);
+  } catch (e) {
     return {
       statusCode: 500,
-      body: JSON.stringify({
-        error:
-          err.message ||
-          "Unknown error in send-sms-reminders. Check Netlify logs.",
-      }),
+      body: JSON.stringify({ error: e.message }),
     };
   }
 };
-
-// ------------------------------
-// FETCH HELPERS
-// ------------------------------
-
-async function fetchOrders() {
-  try {
-    console.log("Fetching Orders from:", ADALO_ORDERS_URL);
-    const response = await axios.get(ADALO_ORDERS_URL, {
-      headers: {
-        Authorization: `Bearer ${ADALO_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    console.log("Orders status:", response.status);
-    return response.data.records || [];
-  } catch (err) {
-    console.error("❌ Orders fetch error:", err.response?.data || err);
-    throw new Error(
-      `Adalo Orders fetch failed: ${err.response?.status || "unknown"}`
-    );
-  }
-}
-
-async function fetchUsers() {
-  try {
-    console.log("Fetching Users from:", ADALO_USERS_URL);
-    const response = await axios.get(ADALO_USERS_URL, {
-      headers: {
-        Authorization: `Bearer ${ADALO_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    console.log("Users status:", response.status);
-    return response.data.records || [];
-  } catch (err) {
-    console.error("❌ Users fetch error:", err.response?.data || err);
-    throw new Error(
-      `Adalo Users fetch failed: ${
-        err.response?.status || "unknown"
-      } - ${JSON.stringify(err.response?.data)}`
-    );
-  }
-}
-
-// ------------------------------
-// UPDATE + SMS HELPERS
-// ------------------------------
-
-async function updateOrder(orderId, fields) {
-  try {
-    const url = `${ADALO_ORDERS_URL}/${orderId}`;
-    await axios.patch(url, fields, {
-      headers: {
-        Authorization: `Bearer ${ADALO_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-    });
-    console.log("Updated order", orderId, fields);
-  } catch (err) {
-    console.error("❌ Update error:", err.response?.data || err);
-  }
-}
-
-async function sendSMS(to, body) {
-  try {
-    await twilio.messages.create({
-      messagingServiceSid: TWILIO_MESSAGING_SERVICE_SID,
-      to,
-      body,
-    });
-    console.log("📲 SMS sent:", to);
-  } catch (err) {
-    console.error("❌ SMS error:", err);
-  }
-}
