@@ -8,15 +8,18 @@ const twilioLib = require("twilio");
 const {
   ADALO_APP_ID,
   ADALO_ORDERS_COLLECTION_ID,
-  ADALO_USERS_COLLECTION_ID,
   ADALO_API_KEY,
   TWILIO_ACCOUNT_SID,
   TWILIO_AUTH_TOKEN,
   TWILIO_MESSAGING_SERVICE_SID,
 } = process.env;
 
+// Orders still use env IDs
 const ADALO_ORDERS_URL = `https://api.adalo.com/v0/apps/${ADALO_APP_ID}/collections/${ADALO_ORDERS_COLLECTION_ID}`;
-const ADALO_USERS_URL = `https://api.adalo.com/v0/apps/${ADALO_APP_ID}/collections/${ADALO_USERS_COLLECTION_ID}`;
+
+// Users: use the known-good collection URL you just used with curl
+const ADALO_USERS_URL =
+  "https://api.adalo.com/v0/apps/898312b7-dedb-4c84-ab75-ae6c32c75e9f/collections/t_461e515419f448d1b849ff19582355f04";
 
 const twilio = twilioLib(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
 
@@ -85,14 +88,6 @@ exports.handler = async (event) => {
       };
     }
 
-    if (!ADALO_USERS_COLLECTION_ID) {
-      console.error("Missing ADALO_USERS_COLLECTION_ID");
-      return {
-        statusCode: 500,
-        body: JSON.stringify({ error: "Missing ADALO_USERS_COLLECTION_ID" }),
-      };
-    }
-
     if (
       !TWILIO_ACCOUNT_SID ||
       !TWILIO_AUTH_TOKEN ||
@@ -110,10 +105,7 @@ exports.handler = async (event) => {
     }
 
     // 1) Fetch orders + users in parallel
-    const [orders, users] = await Promise.all([
-      fetchOrders(),
-      fetchUsers(),
-    ]);
+    const [orders, users] = await Promise.all([fetchOrders(), fetchUsers()]);
 
     console.log(`Fetched ${orders.length} orders and ${users.length} users`);
 
@@ -221,7 +213,11 @@ exports.handler = async (event) => {
     console.error("❌ Handler error:", err.response?.data || err.message || err);
     return {
       statusCode: 500,
-      body: JSON.stringify({ error: err.message }),
+      body: JSON.stringify({
+        error:
+          err.message ||
+          "Unknown error in send-sms-reminders. Check Netlify logs.",
+      }),
     };
   }
 };
@@ -265,7 +261,9 @@ async function fetchUsers() {
   } catch (err) {
     console.error("❌ Users fetch error:", err.response?.data || err);
     throw new Error(
-      `Adalo Users fetch failed: ${err.response?.status || "unknown"}`
+      `Adalo Users fetch failed: ${
+        err.response?.status || "unknown"
+      } - ${JSON.stringify(err.response?.data)}`
     );
   }
 }
