@@ -62,4 +62,195 @@ exports.handler = async () => {
         },
       });
     } catch (err) {
-      console.error("Adalo Users fetch failed:", err.response?.status, e
+      console.error("Adalo Users fetch failed:", err.response?.status, err.response?.statusText);
+      return {
+        statusCode: 500,
+        body: JSON.stringify({
+          error: `Adalo Users fetch failed: ${err.response?.status || ""} - ${
+            err.response?.statusText || ""
+          }`,
+        }),
+      };
+    }
+
+    const users = usersResponse.data.records || [];
+
+    // ------------------------------
+    // 2. FETCH ORDERS
+    // ------------------------------
+    let ordersResponse;
+    try {
+      ordersResponse = await axios.get(ADALO_ORDERS_URL, {
+        headers: {
+          Authorization: `Bearer ${ADALO_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+      });
+    } catch (err) {
+      console.error("Adalo Orders fetch failed:", err.response?.status, err.response?.statusText);
+      return {
+        statusCode: 500,
+        body: JSON.stringify({
+          error: `Adalo Orders fetch failed: ${err.response?.status || ""} - ${
+            err.response?.statusText || ""
+          }`,
+        }),
+      };
+    }
+
+    const orders = ordersResponse.data.records || [];
+
+    // ------------------------------
+    // 3. SETUP COUNTS
+    // ------------------------------
+    let pickupRemindersSent = 0;
+    let returnRemindersSent = 0;
+
+    // ------------------------------
+    // 4. LOOP THROUGH ORDERS
+    // ------------------------------
+    for (const order of orders) {
+      // --- Relationships from Order to Users ---
+      const renterID = Array.isArray(order.Renter)
+        ? order.Renter[0]
+        : order.Renter || null;
+
+      const listerID = Array.isArray(order.Lister)
+        ? order.Lister[0]
+        : order.Lister || null;
+
+      const renter = renterID ? users.find((u) => u.id === renterID) : null;
+      const lister = listerID ? users.find((u) => u.id === listerID) : null;
+
+      // --- Opt-in + phone checks ---
+      const renterOptedIn =
+        renter && renter["sms_opt_in"] && renter["Mobile Number"];
+      const listerOptedIn =
+        lister && lister["sms_opt_in"] && lister["Mobile Number"];
+
+      const renterPhone =
+        renterOptedIn && renter["Mobile Number"]
+          ? "+1" + renter["Mobile Number"]
+          : null;
+
+      const listerPhone =
+        listerOptedIn && lister["Mobile Number"]
+          ? "+1" + lister["Mobile Number"]
+          : null;
+
+      // If nobody for this order has opted in or has a phone, skip
+      if (!renterOptedIn && !listerOptedIn) continue;
+
+      // --- Order date & flags ---
+      const pickupDate = order["Item Pick Up Date"];
+      const returnDate = order["Return Due Date"];
+
+      const pickupAlreadySent = order["pickup_sms_sent_at"];
+      const returnAlreadySent = order["return_sms_sent_at"];
+
+      // ------------------------------
+      // PICKUP REMINDER (Renter + Lister)
+      // ------------------------------
+      if (pickupDate && isToday(pickupDate) && !pickupAlreadySent) {
+        if (twilioClient && TWILIO_MESSAGING_SERVICE_SID) {
+          try {
+            // Renter pickup reminder
+            if (renterPhone) {
+              await twilioClient.messages.create({
+                messagingServiceSid: TWILIO_MESSAGING_SERVICE_SID,
+                to: renterPhone,
+                body: `Reminder: Your GetSuited pickup is today!`,
+              });
+            }
+
+            // Lister pickup reminder
+            if (listerPhone) {
+              await twilioClient.messages.create({
+                messagingServiceSid: TWILIO_MESSAGING_SERVICE_SID,
+                to: listerPhone,
+                body: `Reminder: You have a GetSuited pickup scheduled for today.`,
+              });
+            }
+
+            pickupRemindersSent++;
+
+            // Mark pickup reminder as sent for this order
+            await axios.patch(
+              `${ADALO_ORDERS_URL}/${order.id}`,
+              { pickup_sms_sent_at: new Date().toISOString() },
+              {
+                headers: {
+                  Authorization: `Bearer ${ADALO_API_KEY}`,
+                  "Content-Type": "application/json",
+                },
+              }
+            );
+          } catch (err) {
+            console.log("Pickup SMS failed:", err.message);
+          }
+        }
+      }
+
+      // ------------------------------
+      // RETURN REMINDER (Renter + Lister)
+      // ------------------------------
+      if (returnDate && isToday(returnDate) && !returnAlreadySent) {
+        if (twilioClient && TWILIO_MESSAGING_SERVICE_SID) {
+          try {
+            // Renter return reminder
+            if (renterPhone) {
+              await twilioClient.messages.create({
+                messagingServiceSid: TWILIO_MESSAGING_SERVICE_SID,
+                to: renterPhone,
+                body: `Reminder: Your GetSuited return is due today.`,
+              });
+            }
+
+            // Lister return reminder
+            if (listerPhone) {
+              await twilioClient.messages.create({
+                messagingServiceSid: TWILIO_MESSAGING_SERVICE_SID,
+                to: listerPhone,
+                body: `Reminder: Your GetSuited rental is due back today.`,
+              });
+            }
+
+            returnRemindersSent++;
+
+            // Mark return reminder as sent
+            await axios.patch(
+              `${ADALO_ORDERS_URL}/${order.id}`,
+              { return_sms_sent_at: new Date().toISOString() },
+              {
+                headers: {
+                  Authorization: `Bearer ${ADALO_API_KEY}`,
+                  "Content-Type": "application/json",
+                },
+              }
+            );
+          } catch (err) {
+            console.log("Return SMS failed:", err.message);
+          }
+        }
+      }
+    }
+
+    // ------------------------------
+    // SUCCESS RESPONSE
+    // ------------------------------
+    return {
+      statusCode: 200,
+      body: JSON.stringify({
+        message: "SMS reminders processed",
+        pickupRemindersSent,
+        returnRemindersSent,
+      }),
+    };
+  } catch (e) {
+    console.error("Unhandled error in send-sms-reminders:", e.message);
+    return {
+      statusCode: 500,
+      body: JSON.stringify({ error: e.message }),
+    };
+  }
+};
