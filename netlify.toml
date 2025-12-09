@@ -4,3 +4,8 @@
 
 [functions]
   node_bundler = "esbuild"
+
+[[scheduled]]
+  # Run every day at 9:00 AM EST (14:00 UTC)
+  cron = "0 14 * * *"
+  function = "send-sms-reminders"
