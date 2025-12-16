@@ -62,7 +62,11 @@ exports.handler = async () => {
         },
       });
     } catch (err) {
-      console.error("Adalo Users fetch failed:", err.response?.status, err.response?.statusText);
+      console.error(
+        "Adalo Users fetch failed:",
+        err.response?.status,
+        err.response?.statusText
+      );
       return {
         statusCode: 500,
         body: JSON.stringify({
@@ -87,7 +91,11 @@ exports.handler = async () => {
         },
       });
     } catch (err) {
-      console.error("Adalo Orders fetch failed:", err.response?.status, err.response?.statusText);
+      console.error(
+        "Adalo Orders fetch failed:",
+        err.response?.status,
+        err.response?.statusText
+      );
       return {
         statusCode: 500,
         body: JSON.stringify({
@@ -159,7 +167,7 @@ exports.handler = async () => {
               await twilioClient.messages.create({
                 messagingServiceSid: TWILIO_MESSAGING_SERVICE_SID,
                 to: renterPhone,
-                body: `Reminder: Your GetSuited pickup is today!`,
+                body: `GetSuited: Pickup is scheduled for today. Once you’ve received the item, please mark it as Picked Up in your order page.`,
               });
             }
 
@@ -168,7 +176,7 @@ exports.handler = async () => {
               await twilioClient.messages.create({
                 messagingServiceSid: TWILIO_MESSAGING_SERVICE_SID,
                 to: listerPhone,
-                body: `Reminder: You have a GetSuited pickup scheduled for today.`,
+                body: `GetSuited: A renter is scheduled to pick up an item today. Once the handoff is complete, please mark the order as Picked Up in your order page.`,
               });
             }
 
@@ -202,7 +210,7 @@ exports.handler = async () => {
               await twilioClient.messages.create({
                 messagingServiceSid: TWILIO_MESSAGING_SERVICE_SID,
                 to: renterPhone,
-                body: `Reminder: Your GetSuited return is due today.`,
+                body: `GetSuited: Return is scheduled for today. Once the item has been returned, please mark it as Returned in your order page.`,
               });
             }
 
@@ -211,7 +219,7 @@ exports.handler = async () => {
               await twilioClient.messages.create({
                 messagingServiceSid: TWILIO_MESSAGING_SERVICE_SID,
                 to: listerPhone,
-                body: `Reminder: Your GetSuited rental is due back today.`,
+                body: `GetSuited: A renter is scheduled to return an item today. Once the item is received, please mark the order as Returned in your order page.`,
               });
             }
 
