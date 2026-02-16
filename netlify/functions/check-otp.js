@@ -2,93 +2,91 @@
 
 exports.handler = async (event) => {
   try {
-    // Only allow POST
+    // Handle preflight (important for some iOS/webview requests)
+    if (event.httpMethod === "OPTIONS") {
+      return {
+        statusCode: 200,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization",
+          "Access-Control-Allow-Methods": "POST, OPTIONS",
+        },
+        body: "",
+      };
+    }
+
     if (event.httpMethod !== "POST") {
       return { statusCode: 405, body: "Method Not Allowed" };
     }
 
-    // Helper to require env vars
     const mustGetEnv = (k) => {
       const v = process.env[k];
       if (!v) throw new Error(`Missing env var: ${k}`);
       return v;
     };
 
-    // Twilio credentials + Verify Service SID
     const AC = mustGetEnv("TWILIO_ACCOUNT_SID");
     const AUTH = mustGetEnv("TWILIO_AUTH_TOKEN");
-    const SERVICE = mustGetEnv("TWILIO_VERIFY_SERVICE_SID");
+    const SERVICE = mustGetEnv("TWILIO_VERIFY_SERVICE_SID"); // MUST start with VA
 
     const basicAuth = Buffer.from(`${AC}:${AUTH}`).toString("base64");
 
-    // Parse body safely
-    const body = event.body ? JSON.parse(event.body) : {};
+    const body = JSON.parse(event.body || "{}");
     const { phone, to, code } = body;
 
-    let dest = (to || phone || "").toString().trim();
+    let dest = (to || phone || "").trim();
     const passcode = (code || "").toString().trim();
 
     if (!dest || !passcode) {
       return {
         statusCode: 400,
-        body: JSON.stringify({
-          error: "Missing phone/to or code",
-          received: { dest: !!dest, code: !!passcode },
-        }),
+        headers: { "Access-Control-Allow-Origin": "*" },
+        body: JSON.stringify({ error: "Missing phone/to or code" }),
       };
     }
 
-    // Normalize to E.164 (defaults to US if no +)
+    // Normalize to E.164
     if (!dest.startsWith("+")) {
       dest = "+1" + dest.replace(/\D/g, "");
     }
 
-    // Twilio Verify: VerificationChecks (plural)
-    const url = `https://verify.twilio.com/v2/Services/${SERVICE}/VerificationChecks`;
     const params = new URLSearchParams({ To: dest, Code: passcode });
 
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Basic ${basicAuth}`,
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: params,
-    });
+    // ✅ IMPORTANT: endpoint is VerificationCheck (singular)
+    const resp = await fetch(
+      `https://verify.twilio.com/v2/Services/${SERVICE}/VerificationCheck`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Basic ${basicAuth}`,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: params,
+      }
+    );
 
-    const text = await resp.text();
-    let data;
-    try {
-      data = JSON.parse(text);
-    } catch {
-      data = { raw: text };
-    }
+    const data = await resp.json();
 
-    // Pass through Twilio errors
     if (!resp.ok) {
       return {
         statusCode: resp.status,
-        body: JSON.stringify({
-          error: data,
-          hint:
-            "If you see 20404, double-check TWILIO_VERIFY_SERVICE_SID is a Verify Service SID starting with 'VA' (not Account SID, Messaging Service, etc).",
-        }),
+        headers: { "Access-Control-Allow-Origin": "*" },
+        body: JSON.stringify({ error: data }),
       };
     }
 
-    const valid = data.status === "approved";
-
     return {
       statusCode: 200,
+      headers: { "Access-Control-Allow-Origin": "*" },
       body: JSON.stringify({
         status: data.status,
-        valid,
-        to: dest,
+        valid: data.status === "approved",
       }),
     };
   } catch (e) {
     return {
       statusCode: 500,
+      headers: { "Access-Control-Allow-Origin": "*" },
       body: JSON.stringify({ error: e.message }),
     };
   }
