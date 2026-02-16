@@ -36,7 +36,7 @@ exports.handler = async (event) => {
     const params = new URLSearchParams({ To: dest, Code: code });
 
     const resp = await fetch(
-      `https://verify.twilio.com/v2/Services/${SERVICE}/VerificationCheck`,
+      `https://verify.twilio.com/v2/Services/${SERVICE}/VerificationChecks`,
       {
         method: 'POST',
         headers: {
