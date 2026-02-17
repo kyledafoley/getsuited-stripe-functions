@@ -28,7 +28,9 @@ exports.handler = async (event) => {
     const accountSid = String(process.env.TWILIO_ACCOUNT_SID || "").trim();
     const authToken = String(process.env.TWILIO_AUTH_TOKEN || "").trim();
     const serviceSid = String(process.env.TWILIO_VERIFY_SERVICE_SID || "").trim();
+
     const region = String(process.env.TWILIO_REGION || "").trim(); // ie1, au1, etc.
+    const edge = String(process.env.TWILIO_EDGE || "").trim();     // dublin, sydney, etc.
 
     if (!accountSid || !authToken || !serviceSid) {
       return {
@@ -36,16 +38,22 @@ exports.handler = async (event) => {
         headers,
         body: JSON.stringify({
           error: "Missing Twilio environment variables",
+          missing: {
+            TWILIO_ACCOUNT_SID: !accountSid,
+            TWILIO_AUTH_TOKEN: !authToken,
+            TWILIO_VERIFY_SERVICE_SID: !serviceSid,
+          },
         }),
       };
     }
 
-    // Create Twilio client with optional region
+    // ✅ IMPORTANT: set BOTH region and edge when using Twilio Regions
     const client = twilio(accountSid, authToken, {
       ...(region ? { region } : {}),
+      ...(edge ? { edge } : {}),
     });
 
-    // 🔍 Diagnostic: confirm service is reachable
+    // Diagnostic: confirm Verify service is reachable
     try {
       await client.verify.v2.services(serviceSid).fetch();
     } catch (e) {
@@ -59,9 +67,12 @@ exports.handler = async (event) => {
             code: e.code,
             message: e.message,
           },
-          regionUsed: region || "default (us1)",
+          routing: {
+            regionUsed: region || null,
+            edgeUsed: edge || null,
+          },
           hint:
-            "If 404, confirm TWILIO_REGION matches your Twilio Console region and that the Service SID belongs to this account.",
+            "If you set TWILIO_REGION, also set TWILIO_EDGE (eg dublin for ie1).",
         }),
       };
     }
@@ -90,3 +101,4 @@ exports.handler = async (event) => {
     };
   }
 };
+
