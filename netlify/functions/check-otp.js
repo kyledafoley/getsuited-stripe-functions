@@ -28,46 +28,45 @@ exports.handler = async (event) => {
     const accountSid = String(process.env.TWILIO_ACCOUNT_SID || "").trim();
     const authToken = String(process.env.TWILIO_AUTH_TOKEN || "").trim();
     const serviceSid = String(process.env.TWILIO_VERIFY_SERVICE_SID || "").trim();
-    const region = String(process.env.TWILIO_REGION || "").trim(); // optional: ie1, au1, etc.
+    const region = String(process.env.TWILIO_REGION || "").trim(); // ie1, au1, etc.
 
     if (!accountSid || !authToken || !serviceSid) {
       return {
         statusCode: 500,
         headers,
         body: JSON.stringify({
-          error: "Missing Twilio env vars",
-          missing: {
-            TWILIO_ACCOUNT_SID: !accountSid,
-            TWILIO_AUTH_TOKEN: !authToken,
-            TWILIO_VERIFY_SERVICE_SID: !serviceSid,
-          },
+          error: "Missing Twilio environment variables",
         }),
       };
     }
 
-    // If TWILIO_AUTH_TOKEN is set as "SK...:SECRET", treat it as API Key mode
-    const isApiKeyMode = authToken.startsWith("SK") && authToken.includes(":");
+    // Create Twilio client with optional region
+    const client = twilio(accountSid, authToken, {
+      ...(region ? { region } : {}),
+    });
 
-    let client;
-    if (isApiKeyMode) {
-      const parts = authToken.split(":");
-      const apiKeySid = (parts[0] || "").trim();
-      const apiKeySecret = (parts[1] || "").trim();
-
-      client = twilio(apiKeySid, apiKeySecret, {
-        accountSid,
-        ...(region ? { region } : {}),
-      });
-    } else {
-      client = twilio(accountSid, authToken, {
-        ...(region ? { region } : {}),
-      });
+    // 🔍 Diagnostic: confirm service is reachable
+    try {
+      await client.verify.v2.services(serviceSid).fetch();
+    } catch (e) {
+      return {
+        statusCode: 500,
+        headers,
+        body: JSON.stringify({
+          error: "Verify service fetch failed",
+          twilio: {
+            status: e.status,
+            code: e.code,
+            message: e.message,
+          },
+          regionUsed: region || "default (us1)",
+          hint:
+            "If 404, confirm TWILIO_REGION matches your Twilio Console region and that the Service SID belongs to this account.",
+        }),
+      };
     }
 
-    // Diagnostic: can we fetch the Verify service?
-    await client.verify.v2.services(serviceSid).fetch();
-
-    // OTP check
+    // ✅ Check OTP
     const check = await client.verify.v2
       .services(serviceSid)
       .verificationChecks.create({ to, code });
