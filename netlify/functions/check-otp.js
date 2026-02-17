@@ -1,65 +1,113 @@
-exports.handler = async (event) => {
-  const headers = {
+exports.handler = async function (event) {
+  var headers = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "Content-Type",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Content-Type": "application/json",
+    "Content-Type": "application/json"
   };
 
   if (event.httpMethod === "OPTIONS") {
-    return { statusCode: 200, headers, body: "" };
+    return { statusCode: 200, headers: headers, body: "" };
   }
 
   try {
-    const body = JSON.parse(event.body || "{}");
-    const to = String(body.to || "").trim();
-    const code = String(body.code || "").trim();
-
-    if (!to || !code) {
-      return { statusCode: 400, headers, body: JSON.stringify({ error: "Missing `to` or `code`" }) };
+    var body = {};
+    try {
+      body = JSON.parse(event.body || "{}");
+    } catch (e) {
+      body = {};
     }
 
-    const accountSid = String(process.env.TWILIO_ACCOUNT_SID || "").trim();
-    const authToken = String(process.env.TWILIO_AUTH_TOKEN || "").trim();
-    const serviceSid = String(process.env.TWILIO_VERIFY_SERVICE_SID || "").trim();
+    var to = String(body.to || "").trim();
+    var code = String(body.code || "").trim();
+
+    if (!to || !code) {
+      return {
+        statusCode: 400,
+        headers: headers,
+        body: JSON.stringify({ error: "Missing `to` or `code`" })
+      };
+    }
+
+    var accountSid = String(process.env.TWILIO_ACCOUNT_SID || "").trim();
+    var authToken = String(process.env.TWILIO_AUTH_TOKEN || "").trim();
+    var serviceSid = String(process.env.TWILIO_VERIFY_SERVICE_SID || "").trim();
 
     if (!accountSid || !authToken || !serviceSid) {
       return {
         statusCode: 500,
-        headers,
+        headers: headers,
         body: JSON.stringify({
           error: "Missing Twilio env vars",
           missing: {
             TWILIO_ACCOUNT_SID: !accountSid,
             TWILIO_AUTH_TOKEN: !authToken,
-            TWILIO_VERIFY_SERVICE_SID: !serviceSid,
-          },
-        }),
+            TWILIO_VERIFY_SERVICE_SID: !serviceSid
+          }
+        })
       };
     }
 
-    // Basic auth header for Twilio REST API
-    const basic = Buffer.from(`${accountSid}:${authToken}`).toString("base64");
+    // Build Basic Auth header
+    var basic = Buffer.from(accountSid + ":" + authToken).toString("base64");
 
-    // ✅ Correct Verify endpoint (plural VerificationChecks)
-    const url = `https://verify.twilio.com/v2/Services/${serviceSid}/VerificationChecks`;
+    // Correct Verify endpoint (plural): VerificationChecks
+    var url =
+      "https://verify.twilio.com/v2/Services/" +
+      serviceSid +
+      "/VerificationChecks";
 
-    const form = new URLSearchParams();
+    var form = new URLSearchParams();
     form.append("To", to);
     form.append("Code", code);
 
-    const resp = await fetch(url, {
+    var resp = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Basic ${basic}`,
-        "Content-Type": "application/x-www-form-urlencoded",
+        Authorization: "Basic " + basic,
+        "Content-Type": "application/x-www-form-urlencoded"
       },
-      body: form.toString(),
+      body: form.toString()
     });
 
-    const text = await resp.text();
-    let data;
+    var text = await resp.text();
+    var data;
     try {
       data = JSON.parse(text);
-    } catch {
+    } catch (e) {
+      data = { raw: text };
+    }
 
+    if (!resp.ok) {
+      return {
+        statusCode: 500,
+        headers: headers,
+        body: JSON.stringify({
+          error: "Twilio Verify check failed",
+          httpStatus: resp.status,
+          response: data
+        })
+      };
+    }
+
+    var status = data.status;
+
+    return {
+      statusCode: 200,
+      headers: headers,
+      body: JSON.stringify({
+        approved: status === "approved",
+        status: status
+      })
+    };
+  } catch (err) {
+    return {
+      statusCode: 500,
+      headers: headers,
+      body: JSON.stringify({
+        error: "Unexpected server error",
+        message: err && err.message ? err.message : String(err)
+      })
+    };
+  }
+};
