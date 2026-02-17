@@ -1,5 +1,3 @@
-const twilio = require("twilio");
-
 exports.handler = async (event) => {
   const headers = {
     "Access-Control-Allow-Origin": "*",
@@ -18,26 +16,19 @@ exports.handler = async (event) => {
     const code = String(body.code || "").trim();
 
     if (!to || !code) {
-      return {
-        statusCode: 400,
-        headers,
-        body: JSON.stringify({ error: "Missing `to` or `code`" }),
-      };
+      return { statusCode: 400, headers, body: JSON.stringify({ error: "Missing `to` or `code`" }) };
     }
 
     const accountSid = String(process.env.TWILIO_ACCOUNT_SID || "").trim();
     const authToken = String(process.env.TWILIO_AUTH_TOKEN || "").trim();
     const serviceSid = String(process.env.TWILIO_VERIFY_SERVICE_SID || "").trim();
 
-    const region = String(process.env.TWILIO_REGION || "").trim(); // ie1, au1, etc.
-    const edge = String(process.env.TWILIO_EDGE || "").trim();     // dublin, sydney, etc.
-
     if (!accountSid || !authToken || !serviceSid) {
       return {
         statusCode: 500,
         headers,
         body: JSON.stringify({
-          error: "Missing Twilio environment variables",
+          error: "Missing Twilio env vars",
           missing: {
             TWILIO_ACCOUNT_SID: !accountSid,
             TWILIO_AUTH_TOKEN: !authToken,
@@ -47,58 +38,28 @@ exports.handler = async (event) => {
       };
     }
 
-    // ✅ IMPORTANT: set BOTH region and edge when using Twilio Regions
-    const client = twilio(accountSid, authToken, {
-      ...(region ? { region } : {}),
-      ...(edge ? { edge } : {}),
+    // Basic auth header for Twilio REST API
+    const basic = Buffer.from(`${accountSid}:${authToken}`).toString("base64");
+
+    // ✅ Correct Verify endpoint (plural VerificationChecks)
+    const url = `https://verify.twilio.com/v2/Services/${serviceSid}/VerificationChecks`;
+
+    const form = new URLSearchParams();
+    form.append("To", to);
+    form.append("Code", code);
+
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${basic}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: form.toString(),
     });
 
-    // Diagnostic: confirm Verify service is reachable
+    const text = await resp.text();
+    let data;
     try {
-      await client.verify.v2.services(serviceSid).fetch();
-    } catch (e) {
-      return {
-        statusCode: 500,
-        headers,
-        body: JSON.stringify({
-          error: "Verify service fetch failed",
-          twilio: {
-            status: e.status,
-            code: e.code,
-            message: e.message,
-          },
-          routing: {
-            regionUsed: region || null,
-            edgeUsed: edge || null,
-          },
-          hint:
-            "If you set TWILIO_REGION, also set TWILIO_EDGE (eg dublin for ie1).",
-        }),
-      };
-    }
-
-    // ✅ Check OTP
-    const check = await client.verify.v2
-      .services(serviceSid)
-      .verificationChecks.create({ to, code });
-
-    return {
-      statusCode: 200,
-      headers,
-      body: JSON.stringify({
-        approved: check.status === "approved",
-        status: check.status,
-      }),
-    };
-  } catch (err) {
-    return {
-      statusCode: 500,
-      headers,
-      body: JSON.stringify({
-        error: "Unexpected server error",
-        message: err && err.message ? err.message : String(err),
-      }),
-    };
-  }
-};
+      data = JSON.parse(text);
+    } catch {
 
