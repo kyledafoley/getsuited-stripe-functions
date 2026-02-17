@@ -1,97 +1,136 @@
 // netlify/functions/check-otp.js
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
+const json = (statusCode, obj, extraHeaders = {}) => ({
+  statusCode,
+  headers: {
+    "Content-Type": "application/json",
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    ...extraHeaders,
+  },
+  body: JSON.stringify(obj),
+});
+
+const mustEnv = (k) => {
+  const v = process.env[k];
+  if (!v) throw new Error(`Missing env var: ${k}`);
+  return v;
+};
+
+const normalizeUSPhone = (input) => {
+  if (!input) return "";
+  const raw = String(input).trim();
+
+  // Already E.164
+  if (raw.startsWith("+")) return raw;
+
+  // Strip non-digits
+  const digits = raw.replace(/\D/g, "");
+
+  // If they passed 10 digits, assume US
+  if (digits.length === 10) return `+1${digits}`;
+
+  // If they passed 11 digits starting with 1, US
+  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+
+  // Otherwise, fail (forces you to pass E.164 for non-US)
+  return "";
 };
 
 exports.handler = async (event) => {
-  // Handle CORS preflight (important for iOS/webviews)
+  // Preflight (important for some webviews)
   if (event.httpMethod === "OPTIONS") {
-    return { statusCode: 200, headers: corsHeaders, body: "" };
+    return json(200, { ok: true });
+  }
+
+  if (event.httpMethod !== "POST") {
+    return json(405, { error: "Method Not Allowed" });
   }
 
   try {
-    if (event.httpMethod !== "POST") {
-      return { statusCode: 405, headers: corsHeaders, body: "Method Not Allowed" };
+    const TWILIO_ACCOUNT_SID = mustEnv("TWILIO_ACCOUNT_SID");
+    const TWILIO_AUTH_TOKEN = mustEnv("TWILIO_AUTH_TOKEN");
+    const TWILIO_VERIFY_SERVICE_SID = mustEnv("TWILIO_VERIFY_SERVICE_SID");
+
+    let body = {};
+    try {
+      body = JSON.parse(event.body || "{}");
+    } catch {
+      return json(400, { error: "Invalid JSON body" });
     }
 
-    const mustGetEnv = (k) => {
-      const v = process.env[k];
-      if (!v) throw new Error(`Missing env var: ${k}`);
-      return v;
-    };
+    // Accept either { phone, code } or { to, code }
+    const toRaw = (body.to || body.phone || "").trim();
+    const codeRaw = String(body.code || "").trim();
 
-    const AC = mustGetEnv("TWILIO_ACCOUNT_SID");         // ACxxxxxxxx
-    const AUTH = mustGetEnv("TWILIO_AUTH_TOKEN");
-    const SERVICE = mustGetEnv("TWILIO_VERIFY_SERVICE_SID"); // VAxxxxxxxx
-
-    const basicAuth = Buffer.from(`${AC}:${AUTH}`).toString("base64");
-
-    const payload = JSON.parse(event.body || "{}");
-    const code = (payload.code || "").toString().trim();
-    let to = (payload.to || payload.phone || "").toString().trim();
-
-    if (!to || !code) {
-      return {
-        statusCode: 400,
-        headers: corsHeaders,
-        body: JSON.stringify({ error: "Missing to/phone or code" }),
-      };
+    if (!toRaw || !codeRaw) {
+      return json(400, { error: "Missing 'to/phone' or 'code'" });
     }
 
-    // Normalize phone: keep digits, add +1 if missing country code
-    const digits = to.replace(/\D/g, "");
-    if (to.startsWith("+")) {
-      to = "+" + digits;
-    } else {
-      // assumes US numbers if no +countrycode supplied
-      to = "+1" + digits;
+    const to = normalizeUSPhone(toRaw);
+    if (!to) {
+      return json(400, {
+        error:
+          "Invalid phone format. Use +E.164 (preferred) or a 10-digit US number.",
+      });
     }
+
+    // Twilio Verify codes are typically 4–10 chars; you’re using 6-digit.
+    if (codeRaw.length < 4 || codeRaw.length > 10) {
+      return json(400, { error: "Invalid code length" });
+    }
+
+    const basicAuth = Buffer.from(
+      `${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`
+    ).toString("base64");
 
     const params = new URLSearchParams();
-    params.append("To", to);
-    params.append("Code", code);
+    params.set("To", to);
+    params.set("Code", codeRaw);
 
-    const url = `https://verify.twilio.com/v2/Services/${SERVICE}/VerificationCheck`;
+    const url = `https://verify.twilio.com/v2/Services/${TWILIO_VERIFY_SERVICE_SID}/VerificationCheck`;
 
     const resp = await fetch(url, {
       method: "POST",
       headers: {
         Authorization: `Basic ${basicAuth}`,
         "Content-Type": "application/x-www-form-urlencoded",
-        Accept: "application/json",
       },
-      body: params.toString(),
+      body: params,
     });
 
-    const data = await resp.json().catch(() => ({}));
-
-    if (!resp.ok) {
-      return {
-        statusCode: resp.status,
-        headers: corsHeaders,
-        body: JSON.stringify({
-          error: data,
-          hint:
-            "If you see 20404, confirm TWILIO_VERIFY_SERVICE_SID (VA...) exists in the SAME Twilio Project as TWILIO_ACCOUNT_SID/AUTH_TOKEN.",
-        }),
-      };
+    const dataText = await resp.text();
+    let data;
+    try {
+      data = JSON.parse(dataText);
+    } catch {
+      data = { raw: dataText };
     }
 
-    const valid = data.status === "approved";
+    // Helpful debug without exposing secrets
+    console.log("check-otp:", {
+      http: resp.status,
+      serviceLast6: TWILIO_VERIFY_SERVICE_SID.slice(-6),
+      toLast4: to.slice(-4),
+      twilioStatus: data?.status,
+      twilioCode: data?.code,
+      twilioMessage: data?.message,
+    });
 
-    return {
-      statusCode: 200,
-      headers: corsHeaders,
-      body: JSON.stringify({ status: data.status, valid }),
-    };
-  } catch (e) {
-    return {
-      statusCode: 500,
-      headers: corsHeaders,
-      body: JSON.stringify({ error: e.message }),
-    };
+    if (!resp.ok) {
+      return json(resp.status, {
+        error: "Twilio Verify check failed",
+        twilio: data,
+      });
+    }
+
+    const status = data.status || "unknown"; // "approved" when correct
+    const valid = status === "approved";
+
+    return json(200, { status, valid });
+  } catch (err) {
+    console.error("check-otp exception:", err);
+    return json(500, { error: err.message || "Server error" });
   }
 };
