@@ -1,89 +1,51 @@
 // netlify/functions/check-otp.js
 const twilio = require("twilio");
 
-exports.handler = async (event) => {
-  const headers = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "Content-Type",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Content-Type": "application/json",
-  };
+function getTwilioClient() {
+  const accountSid = (process.env.TWILIO_ACCOUNT_SID || "").trim();
+  const authToken = (process.env.TWILIO_AUTH_TOKEN || "").trim();
+  const serviceSid = (process.env.TWILIO_VERIFY_SERVICE_SID || "").trim();
 
-  if (event.httpMethod === "OPTIONS") {
-    return { statusCode: 200, headers, body: "" };
+  // Optional (only if your Twilio project is in a specific region like "ie1", "au1")
+  const region = (process.env.TWILIO_REGION || "").trim(); // e.g. "ie1"
+
+  if (!accountSid || !serviceSid) {
+    const missing = {
+      TWILIO_ACCOUNT_SID: !accountSid,
+      TWILIO_VERIFY_SERVICE_SID: !serviceSid,
+      // token could be auth token OR api key secret; checked below
+    };
+    throw new Error(
+      `Missing required env vars: ${Object.entries(missing)
+        .filter(([, v]) => v)
+        .map(([k]) => k)
+        .join(", ")}`
+    );
   }
 
-  try {
-    const { to, code } = JSON.parse(event.body || "{}");
+  // Support two modes:
+  // 1) Standard: accountSid + authToken
+  // 2) API Key: authToken env var contains "SKxxxx:SECRET" (recommended for Netlify)
+  //    Example: TWILIO_AUTH_TOKEN="SKxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx:your_api_key_secret"
+  const hasApiKeyPair = authToken.startsWith("SK") && authToken.includes(":");
 
-    if (!to || !code) {
-      return {
-        statusCode: 400,
-        headers,
-        body: JSON.stringify({ error: "Missing `to` or `code`" }),
-      };
+  let client;
+  if (hasApiKeyPair) {
+    const [apiKeySid, apiKeySecret] = authToken.split(":");
+    if (!apiKeySid || !apiKeySecret) {
+      throw new Error("TWILIO_AUTH_TOKEN is formatted like an API key but missing ':' secret.");
     }
-
-    const accountSid = process.env.TWILIO_ACCOUNT_SID;
-    const authToken = process.env.TWILIO_AUTH_TOKEN;
-    const serviceSid = process.env.TWILIO_VERIFY_SERVICE_SID;
-
-    if (!accountSid || !authToken || !serviceSid) {
-      return {
-        statusCode: 500,
-        headers,
-        body: JSON.stringify({
-          error: "Missing Twilio env vars",
-          missing: {
-            TWILIO_ACCOUNT_SID: !accountSid,
-            TWILIO_AUTH_TOKEN: !authToken,
-            TWILIO_VERIFY_SERVICE_SID: !serviceSid,
-          },
-        }),
-      };
+    client = twilio(apiKeySid.trim(), apiKeySecret.trim(), {
+      accountSid,
+      ...(region ? { region } : {}),
+    });
+  } else {
+    if (!authToken) {
+      throw new Error("Missing TWILIO_AUTH_TOKEN (Auth Token or API Key pair).");
     }
-
-    const client = twilio(accountSid, authToken);
-
-    // ✅ THIS is the key diagnostic step
-    try {
-      await client.verify.v2.services(serviceSid).fetch();
-    } catch (e) {
-      return {
-        statusCode: 500,
-        headers,
-        body: JSON.stringify({
-          error: "Verify Service SID not accessible with current credentials",
-          hint: "This means your TWILIO_VERIFY_SERVICE_SID and TWILIO_ACCOUNT_SID/AUTH_TOKEN are from different Twilio accounts/subaccounts.",
-          twilio: {
-            status: e.status,
-            code: e.code,
-            message: e.message,
-          },
-        }),
-      };
-    }
-
-    const check = await client.verify.v2
-      .services(serviceSid)
-      .verificationChecks.create({ to, code });
-
-    return {
-      statusCode: 200,
-      headers,
-      body: JSON.stringify({
-        status: check.status, // "approved" or "pending"
-        approved: check.status === "approved",
-      }),
-    };
-  } catch (err) {
-    return {
-      statusCode: 500,
-      headers,
-      body: JSON.stringify({
-        error: "Unexpected server error",
-        message: err.message,
-      }),
-    };
+    client = twilio(accountSid, authToken, {
+      ...(region ? { region } : {}),
+    });
   }
-};
+
+  return { client,
