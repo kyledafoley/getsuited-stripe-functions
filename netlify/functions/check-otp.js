@@ -1,51 +1,93 @@
-// netlify/functions/check-otp.js
 const twilio = require("twilio");
 
-function getTwilioClient() {
-  const accountSid = (process.env.TWILIO_ACCOUNT_SID || "").trim();
-  const authToken = (process.env.TWILIO_AUTH_TOKEN || "").trim();
-  const serviceSid = (process.env.TWILIO_VERIFY_SERVICE_SID || "").trim();
+exports.handler = async (event) => {
+  const headers = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Content-Type": "application/json",
+  };
 
-  // Optional (only if your Twilio project is in a specific region like "ie1", "au1")
-  const region = (process.env.TWILIO_REGION || "").trim(); // e.g. "ie1"
+  if (event.httpMethod === "OPTIONS") {
+    return { statusCode: 200, headers, body: "" };
+  }
 
-  if (!accountSid || !serviceSid) {
-    const missing = {
-      TWILIO_ACCOUNT_SID: !accountSid,
-      TWILIO_VERIFY_SERVICE_SID: !serviceSid,
-      // token could be auth token OR api key secret; checked below
+  try {
+    const body = JSON.parse(event.body || "{}");
+    const to = String(body.to || "").trim();
+    const code = String(body.code || "").trim();
+
+    if (!to || !code) {
+      return {
+        statusCode: 400,
+        headers,
+        body: JSON.stringify({ error: "Missing `to` or `code`" }),
+      };
+    }
+
+    const accountSid = String(process.env.TWILIO_ACCOUNT_SID || "").trim();
+    const authToken = String(process.env.TWILIO_AUTH_TOKEN || "").trim();
+    const serviceSid = String(process.env.TWILIO_VERIFY_SERVICE_SID || "").trim();
+    const region = String(process.env.TWILIO_REGION || "").trim(); // optional: ie1, au1, etc.
+
+    if (!accountSid || !authToken || !serviceSid) {
+      return {
+        statusCode: 500,
+        headers,
+        body: JSON.stringify({
+          error: "Missing Twilio env vars",
+          missing: {
+            TWILIO_ACCOUNT_SID: !accountSid,
+            TWILIO_AUTH_TOKEN: !authToken,
+            TWILIO_VERIFY_SERVICE_SID: !serviceSid,
+          },
+        }),
+      };
+    }
+
+    // If TWILIO_AUTH_TOKEN is set as "SK...:SECRET", treat it as API Key mode
+    const isApiKeyMode = authToken.startsWith("SK") && authToken.includes(":");
+
+    let client;
+    if (isApiKeyMode) {
+      const parts = authToken.split(":");
+      const apiKeySid = (parts[0] || "").trim();
+      const apiKeySecret = (parts[1] || "").trim();
+
+      client = twilio(apiKeySid, apiKeySecret, {
+        accountSid,
+        ...(region ? { region } : {}),
+      });
+    } else {
+      client = twilio(accountSid, authToken, {
+        ...(region ? { region } : {}),
+      });
+    }
+
+    // Diagnostic: can we fetch the Verify service?
+    await client.verify.v2.services(serviceSid).fetch();
+
+    // OTP check
+    const check = await client.verify.v2
+      .services(serviceSid)
+      .verificationChecks.create({ to, code });
+
+    return {
+      statusCode: 200,
+      headers,
+      body: JSON.stringify({
+        approved: check.status === "approved",
+        status: check.status,
+      }),
     };
-    throw new Error(
-      `Missing required env vars: ${Object.entries(missing)
-        .filter(([, v]) => v)
-        .map(([k]) => k)
-        .join(", ")}`
-    );
+  } catch (err) {
+    return {
+      statusCode: 500,
+      headers,
+      body: JSON.stringify({
+        error: "Unexpected server error",
+        message: err && err.message ? err.message : String(err),
+      }),
+    };
   }
-
-  // Support two modes:
-  // 1) Standard: accountSid + authToken
-  // 2) API Key: authToken env var contains "SKxxxx:SECRET" (recommended for Netlify)
-  //    Example: TWILIO_AUTH_TOKEN="SKxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx:your_api_key_secret"
-  const hasApiKeyPair = authToken.startsWith("SK") && authToken.includes(":");
-
-  let client;
-  if (hasApiKeyPair) {
-    const [apiKeySid, apiKeySecret] = authToken.split(":");
-    if (!apiKeySid || !apiKeySecret) {
-      throw new Error("TWILIO_AUTH_TOKEN is formatted like an API key but missing ':' secret.");
-    }
-    client = twilio(apiKeySid.trim(), apiKeySecret.trim(), {
-      accountSid,
-      ...(region ? { region } : {}),
-    });
-  } else {
-    if (!authToken) {
-      throw new Error("Missing TWILIO_AUTH_TOKEN (Auth Token or API Key pair).");
-    }
-    client = twilio(accountSid, authToken, {
-      ...(region ? { region } : {}),
-    });
-  }
-
-  return { client,
+};
