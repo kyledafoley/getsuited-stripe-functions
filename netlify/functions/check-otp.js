@@ -12,50 +12,23 @@ exports.handler = async function (event) {
 
   try {
     var body = {};
-    try {
-      body = JSON.parse(event.body || "{}");
-    } catch (e) {
-      body = {};
-    }
+    try { body = JSON.parse(event.body || "{}"); } catch (e) { body = {}; }
 
     var to = String(body.to || "").trim();
     var code = String(body.code || "").trim();
 
     if (!to || !code) {
-      return {
-        statusCode: 400,
-        headers: headers,
-        body: JSON.stringify({ error: "Missing `to` or `code`" })
-      };
+      return { statusCode: 400, headers: headers, body: JSON.stringify({ error: "Missing `to` or `code`" }) };
     }
 
     var accountSid = String(process.env.TWILIO_ACCOUNT_SID || "").trim();
-    var authToken = String(process.env.TWILIO_AUTH_TOKEN || "").trim();
+    var authToken  = String(process.env.TWILIO_AUTH_TOKEN || "").trim();
     var serviceSid = String(process.env.TWILIO_VERIFY_SERVICE_SID || "").trim();
 
-    if (!accountSid || !authToken || !serviceSid) {
-      return {
-        statusCode: 500,
-        headers: headers,
-        body: JSON.stringify({
-          error: "Missing Twilio env vars",
-          missing: {
-            TWILIO_ACCOUNT_SID: !accountSid,
-            TWILIO_AUTH_TOKEN: !authToken,
-            TWILIO_VERIFY_SERVICE_SID: !serviceSid
-          }
-        })
-      };
-    }
-
-    // Build Basic Auth header
     var basic = Buffer.from(accountSid + ":" + authToken).toString("base64");
 
-    // Correct Verify endpoint (plural): VerificationChecks
-    var url =
-      "https://verify.twilio.com/v2/Services/" +
-      serviceSid +
-      "/VerificationChecks";
+    // ✅ Correct endpoint is singular
+    var url = "https://verify.twilio.com/v2/Services/" + serviceSid + "/VerificationCheck";
 
     var form = new URLSearchParams();
     form.append("To", to);
@@ -72,11 +45,7 @@ exports.handler = async function (event) {
 
     var text = await resp.text();
     var data;
-    try {
-      data = JSON.parse(text);
-    } catch (e) {
-      data = { raw: text };
-    }
+    try { data = JSON.parse(text); } catch (e) { data = { raw: text }; }
 
     if (!resp.ok) {
       return {
@@ -85,29 +54,22 @@ exports.handler = async function (event) {
         body: JSON.stringify({
           error: "Twilio Verify check failed",
           httpStatus: resp.status,
-          response: data
+          response: data,
+          hint:
+            "If you still get 404 here, Twilio doesn't see a pending verification for this To + Service. That means your send-otp isn't starting a verification in this same service, or it's expired/already used."
         })
       };
     }
-
-    var status = data.status;
 
     return {
       statusCode: 200,
       headers: headers,
       body: JSON.stringify({
-        approved: status === "approved",
-        status: status
+        approved: data.status === "approved",
+        status: data.status
       })
     };
   } catch (err) {
-    return {
-      statusCode: 500,
-      headers: headers,
-      body: JSON.stringify({
-        error: "Unexpected server error",
-        message: err && err.message ? err.message : String(err)
-      })
-    };
+    return { statusCode: 500, headers: headers, body: JSON.stringify({ error: "Unexpected server error", message: err.message }) };
   }
 };
