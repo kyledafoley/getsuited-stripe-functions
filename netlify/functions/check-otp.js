@@ -3,7 +3,7 @@ exports.handler = async function (event) {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "Content-Type",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Content-Type": "application/json",
+    "Content-Type": "application/json"
   };
 
   if (event.httpMethod === "OPTIONS") {
@@ -21,26 +21,19 @@ exports.handler = async function (event) {
       return {
         statusCode: 200,
         headers,
-        body: JSON.stringify({ ok: false, error: "Missing `to` or `code`" }),
+        body: JSON.stringify({ ok: false, error: "Missing `to` or `code`" })
       };
     }
 
-    const accountSid = String(process.env.TWILIO_ACCOUNT_SID || "").trim();
-    const authToken  = String(process.env.TWILIO_AUTH_TOKEN || "").trim();
-    const serviceSid = String(process.env.TWILIO_VERIFY_SERVICE_SID || "").trim();
-
-    if (!accountSid || !authToken || !serviceSid) {
-      return {
-        statusCode: 200,
-        headers,
-        body: JSON.stringify({ ok: false, error: "Server missing Twilio env vars" }),
-      };
-    }
+    const accountSid = process.env.TWILIO_ACCOUNT_SID;
+    const authToken = process.env.TWILIO_AUTH_TOKEN;
+    const serviceSid = process.env.TWILIO_VERIFY_SERVICE_SID;
+    const region = process.env.TWILIO_REGION || "us1";
 
     const basic = Buffer.from(`${accountSid}:${authToken}`).toString("base64");
+    const base = `https://verify.${region}.twilio.com`;
 
-    // ✅ Correct endpoint: VerificationChecks (plural)
-    const url = `https://verify.twilio.com/v2/Services/${serviceSid}/VerificationChecks`;
+    const url = `${base}/v2/Services/${serviceSid}/VerificationChecks`;
 
     const form = new URLSearchParams();
     form.append("To", to);
@@ -50,17 +43,15 @@ exports.handler = async function (event) {
       method: "POST",
       headers: {
         Authorization: `Basic ${basic}`,
-        "Content-Type": "application/x-www-form-urlencoded",
+        "Content-Type": "application/x-www-form-urlencoded"
       },
-      body: form.toString(),
+      body: form.toString()
     });
 
     const text = await resp.text();
     let data;
     try { data = JSON.parse(text); } catch (e) { data = { raw: text }; }
 
-    // Twilio returns 200 with status "approved"/"pending"/"canceled"
-    // but if it's not ok, still return 200 to Adalo with ok:false
     if (!resp.ok) {
       return {
         statusCode: 200,
@@ -68,9 +59,8 @@ exports.handler = async function (event) {
         body: JSON.stringify({
           ok: false,
           error: "Twilio Verify check failed",
-          httpStatus: resp.status,
-          twilio: data,
-        }),
+          twilio: data
+        })
       };
     }
 
@@ -82,15 +72,16 @@ exports.handler = async function (event) {
       headers,
       body: JSON.stringify({
         ok: true,
-        approved,
         status,
-      }),
+        approved
+      })
     };
+
   } catch (err) {
     return {
       statusCode: 200,
       headers,
-      body: JSON.stringify({ ok: false, error: "Unexpected server error", message: err.message }),
+      body: JSON.stringify({ ok: false, error: err.message })
     };
   }
 };
