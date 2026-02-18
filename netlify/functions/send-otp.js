@@ -1,81 +1,41 @@
+const twilio = require("twilio");
+
 exports.handler = async function (event) {
   const headers = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "Content-Type",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Content-Type": "application/json"
+    "Content-Type": "application/json",
   };
 
-  if (event.httpMethod === "OPTIONS") {
-    return { statusCode: 200, headers, body: "" };
-  }
+  if (event.httpMethod === "OPTIONS") return { statusCode: 200, headers, body: "" };
 
   try {
     const body = JSON.parse(event.body || "{}");
-
     const to = String(body.to || "").trim();
+
     if (!to) {
-      return {
-        statusCode: 400,
-        headers,
-        body: JSON.stringify({ ok: false, error: "Missing `to`" })
-      };
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: false, error: "Missing `to`" }) };
     }
 
-    const accountSid = process.env.TWILIO_ACCOUNT_SID;
-    const authToken = process.env.TWILIO_AUTH_TOKEN;
+    const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
     const serviceSid = process.env.TWILIO_VERIFY_SERVICE_SID;
 
-    const basic = Buffer.from(`${accountSid}:${authToken}`).toString("base64");
-
-    const url = `https://verify.twilio.com/v2/Services/${serviceSid}/Verifications`;
-
-    const form = new URLSearchParams();
-    form.append("To", to);
-    form.append("Channel", "sms");
-
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Basic ${basic}`,
-        "Content-Type": "application/x-www-form-urlencoded"
-      },
-      body: form.toString()
-    });
-
-    const data = await resp.json();
-
-    if (!resp.ok) {
-      return {
-        statusCode: 500,
-        headers,
-        body: JSON.stringify({
-          ok: false,
-          error: "Twilio Verify start failed",
-          httpStatus: resp.status,
-          twilio: data
-        })
-      };
-    }
+    const verification = await client.verify.v2
+      .services(serviceSid)
+      .verifications
+      .create({ to, channel: "sms" });
 
     return {
       statusCode: 200,
       headers,
-      body: JSON.stringify({
-        ok: true,
-        status: data.status,
-        to: data.to
-      })
+      body: JSON.stringify({ ok: true, status: verification.status, to: verification.to }),
     };
-
   } catch (err) {
     return {
-      statusCode: 500,
+      statusCode: 200,
       headers,
-      body: JSON.stringify({
-        ok: false,
-        error: err.message
-      })
+      body: JSON.stringify({ ok: false, error: "Verify start failed", message: err.message }),
     };
   }
 };
