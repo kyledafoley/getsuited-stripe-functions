@@ -11,29 +11,29 @@ exports.handler = async function (event) {
   }
 
   try {
-    let body = {};
-    try { body = JSON.parse(event.body || "{}"); } catch (e) {}
+    const body = JSON.parse(event.body || "{}");
 
     const to = String(body.to || "").trim();
     const code = String(body.code || "").trim();
 
     if (!to || !code) {
       return {
-        statusCode: 200,
+        statusCode: 400,
         headers,
-        body: JSON.stringify({ ok: false, error: "Missing `to` or `code`" })
+        body: JSON.stringify({
+          ok: false,
+          error: "Missing `to` or `code`"
+        })
       };
     }
 
     const accountSid = process.env.TWILIO_ACCOUNT_SID;
     const authToken = process.env.TWILIO_AUTH_TOKEN;
     const serviceSid = process.env.TWILIO_VERIFY_SERVICE_SID;
-    const region = process.env.TWILIO_REGION || "us1";
 
     const basic = Buffer.from(`${accountSid}:${authToken}`).toString("base64");
-    const base = `https://verify.${region}.twilio.com`;
 
-    const url = `${base}/v2/Services/${serviceSid}/VerificationChecks`;
+    const url = `https://verify.twilio.com/v2/Services/${serviceSid}/VerificationChecks`;
 
     const form = new URLSearchParams();
     form.append("To", to);
@@ -48,40 +48,39 @@ exports.handler = async function (event) {
       body: form.toString()
     });
 
-    const text = await resp.text();
-    let data;
-    try { data = JSON.parse(text); } catch (e) { data = { raw: text }; }
+    const data = await resp.json();
 
     if (!resp.ok) {
       return {
-        statusCode: 200,
+        statusCode: 500,
         headers,
         body: JSON.stringify({
           ok: false,
           error: "Twilio Verify check failed",
+          httpStatus: resp.status,
           twilio: data
         })
       };
     }
-
-    const status = String(data.status || "").toLowerCase();
-    const approved = status === "approved";
 
     return {
       statusCode: 200,
       headers,
       body: JSON.stringify({
         ok: true,
-        status,
-        approved
+        status: data.status,
+        approved: data.status === "approved"
       })
     };
 
   } catch (err) {
     return {
-      statusCode: 200,
+      statusCode: 500,
       headers,
-      body: JSON.stringify({ ok: false, error: err.message })
+      body: JSON.stringify({
+        ok: false,
+        error: err.message
+      })
     };
   }
 };
